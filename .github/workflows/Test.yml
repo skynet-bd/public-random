@@ -6,12 +6,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 jobs:
-  sonarqube:
-    name: SonarQube
+  test:
+    name: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: trivy scan
+      - name: Trivy Scan
         uses: aquasecurity/trivy-action@0.29.0
         with:
           scan-type: fs
@@ -19,7 +19,7 @@ jobs:
           format: sarif
           output: trivy.sarif
           ignore-unfixed: true
-      - name: create sarif artifact
+      - name: Sarif Artifact
         uses: actions/upload-artifact@v4
         with:
           name: trivy-sarif
