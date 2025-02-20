@@ -9,6 +9,8 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-latest
+    env:
+      TRIVY_SARIF_PATH: .trivy.sarif
     steps:
       - uses: actions/checkout@v4
       - name: Trivy Scan
@@ -17,18 +19,12 @@ jobs:
           scan-type: fs
           scan-ref: .
           format: sarif
-          output: trivy.sarif
+          output: ${{ env.TRIVY_SARIF_PATH }}
           ignore-unfixed: true
-      - name: Sarif Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-sarif
-          path: |
-            trivy.sarif
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v4
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
-            -Dsonar.sarifReportPaths=custom.sarif
+            -Dsonar.sarifReportPaths=${{ env.TRIVY_SARIF_PATH }}
