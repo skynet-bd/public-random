@@ -1,0 +1,105 @@
+# Managing Administrator Credentials
+
+Pelican services maintain multiple types of credentials:
+- The *admin password* provides access to the server's web interface.
+- The *namespace private key* can create arbitrary new credentials (user tokens) for a portion of the federation's namespace.
+
+This page covers various topics in managing these credentials.
+
+## Pre-generate Credentials
+
+### Namespace Private Key
+
+> **Note**: The namespace private key is a **powerful secret** and should never be shared with others.  With the private key, one can create user credentials that can **arbitrarily read or write into your namespace**.
+
+Pelican services rely on a private/public key pair for creating (signing) and verifying the user credentials (tokens) used to read or write objects.  When a new prefix in the data federation is created, an associated public key must be provided; the corresponding private key can generate any arbitrary permissions (including delete!) within the namespace.  For more information about namespace registration, see details [here](../federating-your-data.mdx#obtain-the-public-key-of-the-origin).
+
+When a Pelican origin or other service is started, the server automatically generates a new private key if one is not present.  However, if someone is running the origin on your behalf, you will need to generate the keypair on your own and send the public portion to the origin operator. If you're doing the deployment, it can also be convenient to generate the key-pair in advance and mount the private key file to the Pelican server via configuration variable, especially in a container environment.
+
+The Pelican binary ships with a `pelican generate keygen` for generating a private/public key pairs:
+
+```bash copy
+pelican generate keygen
+```
+
+Pelican will generate both the private key and the public key under the current working directory:
+
+```console
+Successfully generated keys at:
+Private key: /path/to/issuer.jwk
+Public Key: /path/to/issuer-pub.jwks
+```
+
+You can change the location of the generated keys by passing in  arguments `private-key` and/or `public-key`:
+
+
+```bash copy
+pelican generate keygen --private-key /tmp/foo --public-key /tmp/bar
+```
+
+For origin operators, the generated *private key* can be specified in the a Pelican server configuration via the `IssuerKey` parameter so that the server will use the newly-generated key:
+
+
+```yaml filename="pelican.yaml" copy
+IssuerKey: /path/to/generated/issuer.jwk
+```
+
+If there is a remote operator for your origin, email them the **public key** portion.  Never send anyone your private key.  A sample public key looks like the following:
+
+```bash
+$ cat issuer-pub.jwks
+{
+	"keys": [
+		{
+			"alg": "ES256",
+			"crv": "P-256",
+			"kid": "N3Tks9H791dG7bdzjjlQzV-fwwCrnXd_mcd_2D5ZvYE",
+			"kty": "EC",
+			"x": "9IIkGEzyWywecBsIisrJsH-_XqMal-U25dthHewUC5w",
+			"y": "h_1DUotM2qnLPPRia6hGXNKZdpi92VJ5u_NSrZ-pd0c"
+		}
+	]
+}
+```
+
+A sample private key has the following format:
+```bash
+$ cat issuer.jwk
+-----BEGIN PRIVATE KEY-----
+M0G+AgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgzeomq6yJvek0fg2Z
+g+NY6qklGz4ZjVlrRgTDT9hk5EShRANCAAT0giQYTPJbLB5wGwiKysmwf79eoxqX
+5Tbl22Ed7BQLnIf9Q1KLTNqpyzz0YmuoRlzSmXaYvdlSebvzUq2fqXdH
+-----END PRIVATE KEY-----
+```
+
+### Web Interface Administrator Password
+
+By default, Pelican's administrator web interface requires a username/password to be setup to access.  This password can be enabled by a one-time passcode the server writes into the log file.  However, by pre-generating the credential, Pelican server administrators can skip the initial setup and automate installation.
+
+The `pelican generate` command generates the [htpasswd](https://httpd.apache.org/docs/2.4/programs/htpasswd.html)-formatted password file for storing the web interface administrator login password. To generate a password file, run:
+
+```bash copy
+pelican generate password
+```
+
+and Pelican will prompt you to enter and confirm the password:
+
+```console
+Enter your password:
+Confirm the password:
+
+Successfully generated the admin password file at: /path/to/server-web-passwd
+```
+
+You can change the location of the generated htpasswd file by the `-o` or `--output` argument. You can also provide the file that contains your password through the `-p` or `--password` argument.
+
+```bash copy
+pelican generate password -o /path/to/generated-htpasswd-file -p /path/to/password
+```
+
+The generated htpasswd file can then be passed to the Pelican server via `Server.UIPasswordFile` configuration parameter.
+
+```yaml filename="pelican.yaml" copy
+Server:
+  UIPasswordFile: /path/to/generated-htpasswd-file
+```
