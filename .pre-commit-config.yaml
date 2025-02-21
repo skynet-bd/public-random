@@ -1,0 +1,49 @@
+# ***************************************************************
+#
+#  Copyright (C) 2024, Pelican Project, Morgridge Institute for Research
+#
+#  Licensed under the Apache License, Version 2.0 (the "License"); you
+#  may not use this file except in compliance with the License.  You may
+#  obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+# ***************************************************************
+
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+    -   id: trailing-whitespace
+        exclude: github_scripts/pelican_protocol.patch
+    -   id: end-of-file-fixer
+    -   id: check-yaml
+        # Multi-documents are yaml files with multiple --- separating blocks, like
+        # in our docs/parameters.yaml. We need this argument so those parse.
+        args: [--allow-multiple-documents]
+    -   id: check-added-large-files
+        args: ['--maxkb=1024']
+-   repo: https://github.com/golangci/golangci-lint
+    rev: v1.56.2
+    hooks:
+    -   id: golangci-lint
+-   repo: https://github.com/crate-ci/typos
+    rev: v1.28.2
+    hooks:
+    -   id: typos
+        # Override the default arguments, which include writing back all
+        # suggested changes. We don't want false positives to mangle files.
+        args: [--force-exclude, --sort]
+-   repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+    -   id: shellcheck
+        args: [--severity=warning]

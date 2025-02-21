@@ -1,0 +1,155 @@
+//go:build !windows
+
+/***************************************************************
+ *
+ * Copyright (C) 2024, Pelican Project, Morgridge Institute for Research
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you
+ * may not use this file except in compliance with the License.  You may
+ * obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ ***************************************************************/
+
+package launchers
+
+import (
+	"context"
+	_ "embed"
+	"net/url"
+	"strconv"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
+	"github.com/spf13/viper"
+	"golang.org/x/sync/errgroup"
+
+	"github.com/pelicanplatform/pelican/broker"
+	"github.com/pelicanplatform/pelican/cache"
+	"github.com/pelicanplatform/pelican/database"
+	"github.com/pelicanplatform/pelican/launcher_utils"
+	"github.com/pelicanplatform/pelican/lotman"
+	"github.com/pelicanplatform/pelican/metrics"
+	"github.com/pelicanplatform/pelican/param"
+	"github.com/pelicanplatform/pelican/server_structs"
+	"github.com/pelicanplatform/pelican/server_utils"
+	"github.com/pelicanplatform/pelican/web_ui"
+	"github.com/pelicanplatform/pelican/xrootd"
+)
+
+func CacheServe(ctx context.Context, engine *gin.Engine, egrp *errgroup.Group, modules server_structs.ServerType) (server_structs.XRootDServer, error) {
+	err := xrootd.SetUpMonitoring(ctx, egrp)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := cache.CheckCacheSentinelLocation(); err != nil {
+		return nil, err
+	}
+
+	if err := database.InitServerDatabase(server_structs.CacheType); err != nil {
+		return nil, err
+	}
+
+	cache.RegisterCacheAPI(engine, ctx, egrp)
+
+	cacheServer := &cache.CacheServer{}
+	err = cacheServer.GetNamespaceAdsFromDirector()
+	cacheServer.SetFilters()
+	if err != nil {
+		return nil, err
+	}
+	err = launcher_utils.CheckDefaults(cacheServer)
+	if err != nil {
+		return nil, err
+	}
+
+	// Register Lotman
+	if param.Cache_EnableLotman.GetBool() {
+		// Register the web endpoints
+		if param.Lotman_EnableAPI.GetBool() {
+			log.Debugln("Registering Lotman API")
+			lotman.RegisterLotman(ctx, engine.Group("/", web_ui.ServerHeaderMiddleware))
+		}
+
+		// Until https://github.com/PelicanPlatform/lotman/issues/24 is closed, we can only really logic over
+		// top-level prefixes because enumerating all object "directories" under a given federation prefix is
+		// infeasible, but is currently the only way to nest namespaces in Lotman such that a sub namespace
+		// can be associated with a top-level prefix.
+		// To that end, we need to filter out any nested namespaces from the cache server's namespace ads.
+		uniqueTopPrefixes := server_utils.FilterTopLevelPrefixes(cacheServer.GetNamespaceAds())
+
+		// Bind the c library funcs to Go, instantiate lots, set up the Lotman database, etc
+		if success := lotman.InitLotman(uniqueTopPrefixes); !success {
+			return nil, errors.New("Failed to initialize lotman")
+		}
+	}
+
+	broker.RegisterBrokerCallback(ctx, engine.Group("/", web_ui.ServerHeaderMiddleware))
+	broker.LaunchNamespaceKeyMaintenance(ctx, egrp)
+	configPath, err := xrootd.ConfigXrootd(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+
+	xrootd.LaunchXrootdMaintenance(ctx, cacheServer, 2*time.Minute)
+
+	cache.LaunchDirectorTestFileCleanup(ctx)
+
+	if param.Cache_SelfTest.GetBool() {
+		err = cache.InitSelfTestDir()
+		if err != nil {
+			return nil, err
+		}
+
+		cache.PeriodicCacheSelfTest(ctx, egrp)
+	}
+
+	// Director and origin also registers this metadata URL; avoid registering twice.
+	if !modules.IsEnabled(server_structs.DirectorType) && !modules.IsEnabled(server_structs.OriginType) {
+		server_utils.RegisterOIDCAPI(engine.Group("/", web_ui.ServerHeaderMiddleware), false)
+	}
+
+	log.Info("Launching cache")
+	launchers, err := xrootd.ConfigureLaunchers(false, configPath, false, true)
+	if err != nil {
+		return nil, err
+	}
+
+	portStartCallback := func(port int) {
+		viper.Set("Cache.Port", port)
+		if cacheUrl, err := url.Parse(param.Origin_Url.GetString()); err == nil {
+			cacheUrl.Host = cacheUrl.Hostname() + ":" + strconv.Itoa(port)
+			viper.Set("Cache.Url", cacheUrl.String())
+			log.Debugln("Resetting Cache.Url to", cacheUrl.String())
+		}
+		log.Infoln("Cache startup complete on port", port)
+	}
+
+	pids, err := xrootd.LaunchDaemons(ctx, launchers, egrp, portStartCallback)
+	if err != nil {
+		return nil, err
+	}
+	cacheServer.SetPids(pids)
+	return cacheServer, nil
+}
+
+// Finish configuration of the cache server.
+func CacheServeFinish(ctx context.Context, egrp *errgroup.Group, cacheServer server_structs.XRootDServer) error {
+	log.Debug("Register Cache")
+	metrics.SetComponentHealthStatus(metrics.OriginCache_Registry, metrics.StatusWarning, "Start to register namespaces for the cache server")
+	if err := launcher_utils.RegisterNamespaceWithRetry(ctx, egrp, server_structs.GetCacheNS(param.Xrootd_Sitename.GetString())); err != nil {
+		return err
+	}
+	log.Debug("Cache is registered")
+	return nil
+}
